@@ -197,7 +197,6 @@ class RankingForms(messages.Message):
     """Return multiple ScoreForms"""
     items = messages.MessageField(RankingForm, 1, repeated=True)
 
-
 class StringMessage(messages.Message):
     """StringMessage-- outbound (single) string message"""
     message = messages.StringField(1, required=True)

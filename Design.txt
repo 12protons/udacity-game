@@ -1,0 +1,13 @@
+Words Storage
+
+In case we want to use a words list from another service, the word list in JSON format in a flat file. Updating this to consume a JSON response from a word list service would not be a big change.
+
+
+User Changes
+
+In order to not need to iterate over all of the games when deciding which users to email, a count of active games is stored in the user. This results in a single simple datastore query to check the users that need to be emailed. Similarly, a user's win and loss count is stored here, so there is no need to iterate over all of user's games to find the user's ranking.
+
+
+Game Changes
+
+Similar to the user changes above, each Game entity contains the numbers of letters the user has already guessed. This removes the need to check all of the child Move entities each time a new guess is made. The only time Move entities need to be read is when the game history api is used.

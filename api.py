@@ -203,14 +203,14 @@ class HangmanApi(remote.Service):
         if not user:
             raise endpoints.NotFoundException(
                     'A User with that name does not exist!')
-        games = Game.query(Game.user == user.key)
+        games = Game.query(Game.user == user.key, Game.game_over == False)
         return GameForms(items=[game.to_form() for game in games])
 
     @endpoints.method(request_message=GAME_REQUEST,
                       response_message=StringMessage,
                       path='games/cancel/{urlsafe_game_key}',
                       name='cancel_game',
-                      http_method='POST')
+                      http_method='PUT')
     def cancel_game(self, request):
         """Cancels an active game"""
         game = utils.get_by_urlsafe(request.urlsafe_game_key, Game)
