@@ -12,13 +12,13 @@ from protorpc import remote, messages
 from google.appengine.api import memcache
 from google.appengine.api import taskqueue
 
-from models import User, Game, Score
-from models import StringMessage, NewGameForm, GameForm, MakeMoveForm,\
-    GuessAnswerForm, ScoreForms
+from models import User, Game, Score, Move
+from models import StringMessage, NewGameForm, GameForm, GameMessageForm, MakeMoveForm,\
+    GuessAnswerForm, ScoreForms, GameForms, RankingForms, MoveForms
 
 NEW_GAME_REQUEST = endpoints.ResourceContainer(NewGameForm)
 GET_GAME_REQUEST = endpoints.ResourceContainer(
-        urlsafe_game_key=messages.StringField(1),)
+    urlsafe_game_key=messages.StringField(1),)
 MAKE_MOVE_REQUEST = endpoints.ResourceContainer(
     MakeMoveForm,
     urlsafe_game_key=messages.StringField(1),)
@@ -26,7 +26,11 @@ GUESS_ANSWER_REQUEST = endpoints.ResourceContainer(
     GuessAnswerForm,
     urlsafe_game_key=messages.StringField(1),)
 USER_REQUEST = endpoints.ResourceContainer(user_name=messages.StringField(1),
-                                           email=messages.StringField(2))
+                                           email=messages.StringField(2),)
+GAME_REQUEST = endpoints.ResourceContainer(
+    urlsafe_game_key=messages.StringField(1),)
+HIGH_SCORES_REQUEST = endpoints.ResourceContainer(
+    number_of_results=messages.IntegerField(1),)
 
 MEMCACHE_MOVES_REMAINING = 'MOVES_REMAINING'
 
@@ -49,7 +53,7 @@ class HangmanApi(remote.Service):
                 request.user_name))
 
     @endpoints.method(request_message=NEW_GAME_REQUEST,
-                      response_message=GameForm,
+                      response_message=GameMessageForm,
                       path='game',
                       name='new_game',
                       http_method='POST')
@@ -60,7 +64,7 @@ class HangmanApi(remote.Service):
             raise endpoints.NotFoundException(
                     'A User with that name does not exist!')
 
-        game = Game.new_game(user.key, request.attempts)
+        game = Game.new_game(user, request.attempts)
 
         # Use a task queue to update the average attempts remaining.
         # This operation is not needed to complete the creation of a new game
@@ -69,7 +73,7 @@ class HangmanApi(remote.Service):
         return game.to_form('Good luck playing Hangman!')
 
     @endpoints.method(request_message=GET_GAME_REQUEST,
-                      response_message=GameForm,
+                      response_message=GameMessageForm,
                       path='game/{urlsafe_game_key}',
                       name='get_game',
                       http_method='GET')
@@ -82,7 +86,7 @@ class HangmanApi(remote.Service):
             raise endpoints.NotFoundException('Game not found!')
 
     @endpoints.method(request_message=MAKE_MOVE_REQUEST,
-                      response_message=GameForm,
+                      response_message=GameMessageForm,
                       path='game/{urlsafe_game_key}',
                       name='make_move',
                       http_method='PUT')
@@ -97,6 +101,9 @@ class HangmanApi(remote.Service):
 
         game.attempts_remaining -= 1
         game.guessed_letters = game.guessed_letters + request.letter_guess
+
+        move = Move(game=game.key, move=request.letter_guess, move_index=game.attempts_allowed - game.attempts_remaining)
+        move.put()
 
         if utils.guessed_letters_are_correct(game.guessed_letters, game.target):
             game.end_game(True)
@@ -115,7 +122,7 @@ class HangmanApi(remote.Service):
             return game.to_form(msg)
 
     @endpoints.method(request_message=GUESS_ANSWER_REQUEST,
-                      response_message=GameForm,
+                      response_message=GameMessageForm,
                       path='game_guess/{urlsafe_game_key}',
                       name='guess_answer',
                       http_method='PUT')
@@ -129,6 +136,8 @@ class HangmanApi(remote.Service):
             return game.to_form('Sorry, %s is an invalid guess!' % request.guess)
 
         game.attempts_remaining -= 1
+        move = Move(game=game.key, move=request.word_guess, move_index=game.attempts_allowed - game.attempts_remaining)
+        move.put()
 
         if request.word_guess == game.target:
             game.end_game(True)
@@ -151,6 +160,24 @@ class HangmanApi(remote.Service):
         """Return all scores"""
         return ScoreForms(items=[score.to_form() for score in Score.query()])
 
+    @endpoints.method(response_message=RankingForms,
+                      path='rankings',
+                      name='get_rankings',
+                      http_method='GET')
+    def get_rankings(self, request):
+        """Return all rankings"""
+        return RankingForms(items=[user.to_ranking_form() for user in User.query()])
+
+    @endpoints.method(request_message=HIGH_SCORES_REQUEST,
+                      response_message=ScoreForms,
+                      path='highscores',
+                      name='get_highscores',
+                      http_method='GET')
+    def get_highscores(self, request):
+        """Return highest scores, limited by the number of results requested"""
+        highscores = Score.query().order(Score.guesses).fetch(request.number_of_results)
+        return ScoreForms(items=[score.to_form() for score in highscores])
+
     @endpoints.method(request_message=USER_REQUEST,
                       response_message=ScoreForms,
                       path='scores/user/{user_name}',
@@ -164,6 +191,51 @@ class HangmanApi(remote.Service):
                     'A User with that name does not exist!')
         scores = Score.query(Score.user == user.key)
         return ScoreForms(items=[score.to_form() for score in scores])
+
+    @endpoints.method(request_message=USER_REQUEST,
+                      response_message=GameForms,
+                      path='games/user/{user_name}',
+                      name='get_user_games',
+                      http_method='GET')
+    def get_user_games(self, request):
+        """Returns all of an individual User's active games"""
+        user = User.query(User.name == request.user_name).get()
+        if not user:
+            raise endpoints.NotFoundException(
+                    'A User with that name does not exist!')
+        games = Game.query(Game.user == user.key)
+        return GameForms(items=[game.to_form() for game in games])
+
+    @endpoints.method(request_message=GAME_REQUEST,
+                      response_message=StringMessage,
+                      path='games/cancel/{urlsafe_game_key}',
+                      name='cancel_game',
+                      http_method='POST')
+    def cancel_game(self, request):
+        """Cancels an active game"""
+        game = utils.get_by_urlsafe(request.urlsafe_game_key, Game)
+
+        if game.game_over:
+            return StringMessage(message='Game already over!')
+
+        user = game.user.get()
+        user.active_games = user.active_games - 1
+        user.put()
+
+        game.delete()
+
+        return StringMessage(message='Game deleted!')
+
+    @endpoints.method(request_message=GAME_REQUEST,
+                      response_message=MoveForms,
+                      path='games/history/{urlsafe_game_key}',
+                      name='show_game_history',
+                      http_method='GET')
+    def show_game_history(self, request):
+        """Shows the history of a particular game"""
+        game = utils.get_by_urlsafe(request.urlsafe_game_key, Game)
+        moves = Move.query(Move.game == game.key).order(Move.move_index)
+        return MoveForms(items=[move.to_form() for move in moves])
 
     @endpoints.method(response_message=StringMessage,
                       path='games/average_attempts',
