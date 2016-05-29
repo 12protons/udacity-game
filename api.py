@@ -217,14 +217,9 @@ class HangmanApi(remote.Service):
 
         if game.game_over:
             return StringMessage(message='Game already over!')
-
-        user = game.user.get()
-        user.active_games = user.active_games - 1
-        user.put()
-
-        game.delete()
-
-        return StringMessage(message='Game deleted!')
+        else:
+            game.end_game(False)
+            return StringMessage(message='Game successfully cancelled, Please start a new game!')
 
     @endpoints.method(request_message=GAME_REQUEST,
                       response_message=MoveForms,
